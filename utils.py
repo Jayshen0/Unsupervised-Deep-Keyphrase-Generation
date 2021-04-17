@@ -27,6 +27,39 @@ def extract_candidates(text):
   
     return keyphrase_candidate
 
+def get_ngram(text):
+    ret = set()
+    all_can=[]
+    ret= set()
+    ret2 = set()
+    i=-1
+    for e in text:
+        i+=1
+        e = e[0]
+        #if i == 2000:
+        #    break
+ 
+        tmp = extract_candidates(e.lower())
+        tmp2 = set()
+        t=set()
+        for q in tmp:
+            if '_of' in q:
+                if q[-3:]=='_of':
+                    continue
+                q = q.replace('_of', ' of')
+            t.add(q)
+        all_can.append(t)
+        
+        for q in all_can[-1]:
+        
+            ret.add(q)
+            for m in q.split():
+                ret.add(m)
+
+        ret2 = ret2 | all_can[-1]
+
+        
+    return ret2, all_can,ret
 
 def get_fscore(pred,label):
     
