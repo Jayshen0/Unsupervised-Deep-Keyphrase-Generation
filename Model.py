@@ -1,14 +1,12 @@
 import torch.nn as nn
-import nltk
 import torch.nn.functional as F
 import torch
 from torch.autograd import Variable
 import numpy as np
 import random
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
 
 class Encoder(nn.Module):
-    def __init__(self, input_dim=42153, emb_dim=200, hid_dim=256, dropout=0.5,name='emb_kp20k.npy'):
+    def __init__(self, input_dim=50004, emb_dim=200, hid_dim=256, dropout=0.5,name='emb_kp20k2.npy'):
         super().__init__()
 
         self.hid_dim = hid_dim
@@ -39,13 +37,13 @@ class Encoder(nn.Module):
         
         #outputs are always from the top hidden layer
     
-        return hidden
+        return hidden, outputs
     
 
 
 
 class Decoder(nn.Module):
-    def __init__(self, output_dim=24487, emb_dim=200, hid_dim=256, dropout=0.5, name='emb_kp20k2.npy'):
+    def __init__(self, output_dim=50004, emb_dim=200, hid_dim=256, dropout=0.5, name='emb_kp20k2.npy'):
         super().__init__()
 
         self.hid_dim = hid_dim
@@ -53,13 +51,12 @@ class Decoder(nn.Module):
         
         self.embedding = nn.Embedding(output_dim, emb_dim)
 
-     
-        #emb = np.load(name)
-        #self.embedding.weight.data.copy_(torch.from_numpy(emb))
-    
 
-        
-        self.rnn = nn.LSTM(emb_dim, hid_dim,bidirectional=True)
+        self.attention_layer = nn.Sequential(
+                             nn.Linear(self.hid_dim, self.hid_dim),
+                                         nn.ReLU(inplace=True)
+                                                 )
+        self.rnn = nn.LSTM(emb_dim, hid_dim)
         
         self.fc_out = nn.Linear(emb_dim + hid_dim, output_dim)
         
@@ -95,9 +92,18 @@ class Decoder(nn.Module):
         #seq len, n layers and n directions will always be 1 in the decoder, therefore:
         #output = [1, batch size, hid dim]
         #hidden = [1, batch size, hid dim]
-        
-        output = torch.cat((embedded.squeeze(0), (0.5*hidden[0][0][:].squeeze(0)+hidden[0][1][:])), 
+        h,c = hidden
+        context = nn.Tanh()(context)
+        h = self.attention_layer(h)
+        w = torch.bmm(context, h.permute(1,2,0)) 
+        w = w.squeeze()
+        w = F.softmax(w,dim=-1) 
+        #print(w.shape, context.shape)
+        w = torch.bmm(w.unsqueeze(1), context)
+        w = w.squeeze() 
+        output = torch.cat((embedded.squeeze(0),w),
                            dim = 1)
+    
         
         #output = [batch size, emb dim + hid dim * 2]
         
@@ -114,11 +120,8 @@ class Seq2Seq(nn.Module):
         self.encoder = encoder
         self.decoder = decoder
         self.device = device
-        self.beam = 30
-        self.vocab = np.load('vocab_kp20k.npy', allow_pickle=True).item()
-        self.link = np.load('link.npy', allow_pickle=True).item()
-
-    def forward(self, src, trg, info, teacher_forcing_ratio = 0.5):
+        
+    def forward(self, src, trg, teacher_forcing_ratio = 0.5):
     
         #src = [src len, batch size]
         #trg = [trg len, batch size]
@@ -135,93 +138,45 @@ class Seq2Seq(nn.Module):
         outputs = torch.zeros(trg_len, batch_size, trg_vocab_size).to(self.device)
         
         #last hidden state of the encoder is the context
-        context = self.encoder(src)
+        context,aa = self.encoder(src)
         
         #context also used as the initial hidden state of the decoder
         hidden = context
-        back = hidden
+
+        h,c = hidden
+        h = 0.5*(h[0][:][:].squeeze(0)+h[1][:][:].squeeze(0))
+        c = 0.5*(c[0][:][:].squeeze(0)+c[1][:][:].squeeze(0))
+        hidden = (h.unsqueeze(0),c.unsqueeze(0))
+        
+        aa = 0.5*(aa[:,:,:256]+aa[:,:,256:])
+        aa = aa.permute(1,0,2)
+
+
         
         #first input to the decoder is the <sos> tokens
         input = trg[0,:]
-        m = nn.Softmax(dim=1)
     
-        ret = []
-        first_out, first_hidden = self.decoder(input, hidden, context)
-        first_out[0,3] = -1
-        first_out[0,0] = -1
         
-        first_out = m(first_out)
-        #print(info)
-        n=set([1])
-        for e in info:
-            if int(e)!=3:
-                n.add(int(e))
-        info = n
-        cnt=0
-        for e in info:
-            first_out[0,e] = float(first_out[0,e])*3
-        
-        for i in range(15):          
-            input = first_out.argmax(1)
-           
-            if first_out[0, input] == -1:
-                break
+        for t in range(1, trg_len):
             
-            first_out2, first_hidden2 = self.decoder(input, first_hidden, context)
-            first_out2 = m(first_out2)
-            first_out2[0,3] = -1
-            first_out2[0,input] = -1
-            word = self.vocab.idx2word[int(input)]
-            ret.append([float(first_out[0,input]), first_out2, first_hidden2, int(input), [word]]) 
-            first_out[0,input]= -1
-        cc=0
-        for j in range(5):
-            tmp = []
-            for e in ret: 
-                if (j == 0) and (cc<=2):
-                    e[1][0,1] = -1
-                    cc += 1
-                
-                if e[-1][-1]=='<end>':
-                    tmp.append(e)
-                    continue
+            #insert input token embedding, previous hidden state and the context state
+            #receive output tensor (predictions) and new hidden state
+            output, hidden = self.decoder(input, hidden, aa)
             
-                t = info & self.link[e[-2]]
-                for p in t:
-                    e[1][0,p] = e[1][0,p]*5
-                #or p in info:
-                #    e[1][0,p] *= 2
-                for i in range(2): 
-                    input = e[1].argmax(1)
-                
-                    """
-                    while int(input) not in t:
-                        e[1][0, input] = -1
-                        input = e[1].argmax(1) 
-                        if e[1][0,input] == -1:
-                            break
-                    """
-                    if e[1][0,input] == -1:
-                        break
+            #place predictions in a tensor holding predictions for each token
+            outputs[t] = output
+            
+            #decide if we are going to use teacher forcing or not
+            teacher_force = random.random() < teacher_forcing_ratio
+            
+            #get the highest predicted token from our predictions
+            top1 = output.argmax(1) 
+            
+            #if teacher forcing, use actual next token as next input
+            #if not, use predicted token
+            input = trg[t] if teacher_force else top1
 
-                    word = self.vocab.idx2word[int(input)]
-                    if word in e[-1]:
-                        continue
-                    
-                    output, hidden = self.decoder(input, e[2], context) 
-                    output = m(output)
-                    output[0,3] = -1
-                    output[0,input]=-1
-                    
-                    tmp.append([e[0]*float(e[1][0,input]), output, hidden,input,e[-1]+[word]])
-                    e[1][0,input]=-1 
-                
-            ret = tmp
-            ret.sort(reverse=True, key=lambda e:e[0])
-            ret = ret[:int(self.beam)]
-        
-            
-        return ret
+        return outputs
         
         
 
