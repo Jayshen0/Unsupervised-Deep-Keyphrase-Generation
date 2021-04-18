@@ -135,7 +135,7 @@ def Extract(input):
         rank = reduce(rank)
         rank2 = reduce(rank2)
 
-        record.append([rank[:5],rank2[:5]])
+        record.append([input[i], list(set(rank[:5] + rank2[:5])))
     np.save('silver.npy', record)
  
 if __name__ == '__main__':
