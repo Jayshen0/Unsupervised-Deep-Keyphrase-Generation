@@ -28,10 +28,10 @@ def extract_candidates(text):
     return keyphrase_candidate
 
 def get_ngram(text):
-    ret = set()
-    all_can=[]
-    ret= set()
-    ret2 = set()
+
+    can_list=[]
+    can_set= set()
+
     i=-1
     for e in text:
         i+=1
@@ -48,18 +48,36 @@ def get_ngram(text):
                     continue
                 q = q.replace('_of', ' of')
             t.add(q)
-        all_can.append(t)
+        can_list.append(t)
         
         for q in all_can[-1]:
         
             ret.add(q)
             for m in q.split():
-                ret.add(m)
+                can_set.add(m)
 
-        ret2 = ret2 | all_can[-1]
+        can_set = can_set | can_list[-1]
 
         
-    return ret2, all_can,ret
+    return  can_list, can_set
+
+def reduce(rank):
+    new_rank = []
+            for q in rank:
+                if q[1] not in trash:
+                    new_rank.append(q[1])
+            rank = new_rank
+            ret=[]
+            for q in rank:
+                flg=0
+                for p in ret:
+                    if (p in q) or (q in p):
+                        flg=1
+                        break
+                if flg:
+                    continue
+                ret.append(q)
+    return ret
 
 def get_fscore(pred,label):
     
